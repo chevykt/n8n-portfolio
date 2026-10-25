@@ -1,0 +1,40 @@
+{
+  "name": "W4 - Health Check",
+  "settings": { "executionOrder": "v1" },
+  "connections": {
+    "Every Hour": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Run Now (demo)": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Latest W2 Report", "type": "main", "index": 0 }]] },
+    "Latest W2 Report": { "main": [[{ "node": "Errors Last 24h", "type": "main", "index": 0 }]] },
+    "Errors Last 24h": { "main": [[{ "node": "Evaluate Health", "type": "main", "index": 0 }]] },
+    "Evaluate Health": { "main": [[{ "node": "Log to w4_health", "type": "main", "index": 0 }]] },
+    "Log to w4_health": { "main": [[{ "node": "Unhealthy?", "type": "main", "index": 0 }]] },
+    "Unhealthy?": { "main": [[{ "node": "Gmail: Health Alert", "type": "main", "index": 0 }]] }
+  },
+  "nodes": [
+    { "name": "Every Hour", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.4, "position": [0, 200], "parameters": { "rule": { "interval": [{ "field": "hours", "hoursInterval": 1, "triggerAtMinute": 5 }] } } },
+    { "name": "Run Now (demo)", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 400], "parameters": {} },
+    { "name": "Config", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [220, 300], "parameters": { "mode": "manual", "includeOtherFields": false, "assignments": { "assignments": [
+      { "id": "h1", "name": "w2_max_age_hours", "value": 26, "type": "number" },
+      { "id": "h2", "name": "max_errors_24h", "value": 0, "type": "number" },
+      { "id": "h3", "name": "alert_to", "value": "you@example.com", "type": "string" }
+    ] }, "options": {} } },
+    { "name": "Latest W2 Report", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [440, 300], "alwaysOutputData": true, "parameters": { "resource": "row", "operation": "get", "dataTableId": { "__rl": true, "mode": "name", "value": "w2_reports" }, "returnAll": false, "limit": 1, "orderBy": true, "orderByColumn": "run_at", "orderByDirection": "DESC" } },
+    { "name": "Errors Last 24h", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [660, 300], "executeOnce": true, "alwaysOutputData": true, "parameters": { "resource": "row", "operation": "get", "dataTableId": { "__rl": true, "mode": "name", "value": "w4_errors" }, "matchType": "allConditions", "filters": { "conditions": [{ "keyName": "occurred_at", "condition": "gte", "keyValue": "={{ $now.minus(24, 'hours').toISO() }}" }] }, "returnAll": true } },
+    { "name": "Evaluate Health", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [880, 300], "parameters": { "mode": "runOnceForAllItems", "language": "javaScript", "jsCode": "const cfg = $('Config').first().json;\nconst last = $('Latest W2 Report').first().json;\nconst errors = $('Errors Last 24h').all().filter(i => i.json.execution_id).length;\nconst problems = [];\nlet ageHours = null;\nif (!last.run_at) problems.push('W2 has never run');\nelse {\n  ageHours = Math.round((Date.now() - new Date(last.run_at).getTime()) / 36e5 * 10) / 10;\n  if (ageHours > cfg.w2_max_age_hours) problems.push('W2 last ran ' + ageHours + 'h ago (limit ' + cfg.w2_max_age_hours + 'h)');\n  if (last.status !== 'ok') problems.push('W2 last run status: ' + last.status);\n}\nif (errors > cfg.max_errors_24h) problems.push(errors + ' workflow error(s) in the last 24h');\nreturn [{ json: { checked_at: new Date().toISOString(), status: problems.length ? 'unhealthy' : 'healthy', w2_last_run_at: last.run_at ?? null, w2_age_hours: ageHours, w2_last_status: last.status ?? 'never', errors_24h: errors, problems: problems.join('; ') } }];" } },
+    { "name": "Log to w4_health", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [1100, 300], "parameters": { "resource": "row", "operation": "insert", "dataTableId": { "__rl": true, "mode": "name", "value": "w4_health" }, "columns": { "mappingMode": "defineBelow", "value": {
+      "checked_at": "={{ $json.checked_at }}", "status": "={{ $json.status }}", "w2_last_run_at": "={{ $json.w2_last_run_at }}", "w2_age_hours": "={{ $json.w2_age_hours }}", "w2_last_status": "={{ $json.w2_last_status }}", "errors_24h": "={{ $json.errors_24h }}", "problems": "={{ $json.problems }}"
+    }, "schema": [
+      { "id": "checked_at", "displayName": "checked_at", "required": false, "defaultMatch": false, "display": true, "type": "dateTime", "canBeUsedToMatch": true },
+      { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "w2_last_run_at", "displayName": "w2_last_run_at", "required": false, "defaultMatch": false, "display": true, "type": "dateTime", "canBeUsedToMatch": true },
+      { "id": "w2_age_hours", "displayName": "w2_age_hours", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "w2_last_status", "displayName": "w2_last_status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "errors_24h", "displayName": "errors_24h", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "problems", "displayName": "problems", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+    ] }, "options": {} } },
+    { "name": "Unhealthy?", "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [1320, 300], "parameters": { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "conditions": [{ "leftValue": "={{ $json.status }}", "rightValue": "unhealthy", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } } },
+    { "name": "Gmail: Health Alert", "type": "n8n-nodes-base.gmail", "typeVersion": 2.2, "position": [1540, 220], "onError": "continueRegularOutput", "parameters": { "resource": "message", "operation": "send", "sendTo": "={{ $('Config').first().json.alert_to }}", "subject": "[n8n HEALTH] Problems detected", "emailType": "text", "message": "={{ $json.problems }}\n\nW2 last run: {{ $json.w2_last_run_at }} ({{ $json.w2_age_hours }}h ago, status {{ $json.w2_last_status }})\nErrors in last 24h: {{ $json.errors_24h }}", "options": { "appendAttribution": false } } },
+    { "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [-32, 112], "parameters": { "content": "## W4: Health check\nHourly. Confirms the key jobs actually ran, instead of trusting that they did:\n- W2 wrote a report in the last 26h and its last status was `ok`\n- no workflow errors in the last 24h (from w4_errors)\n\nEvery check is logged to **w4_health**; problems send one alert.", "color": 5, "width": 460, "height": 300 } }
+  ]
+}

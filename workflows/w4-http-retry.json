@@ -1,0 +1,34 @@
+{
+  "name": "W4 - HTTP Retry with Backoff (sub-workflow)",
+  "settings": { "executionOrder": "v1" },
+  "connections": {
+    "Called by Another Workflow": { "main": [[{ "node": "Init Request", "type": "main", "index": 0 }]] },
+    "Init Request": { "main": [[{ "node": "HTTP Attempt", "type": "main", "index": 0 }]] },
+    "HTTP Attempt": { "main": [[{ "node": "Evaluate Attempt", "type": "main", "index": 0 }]] },
+    "Evaluate Attempt": { "main": [[{ "node": "Succeeded?", "type": "main", "index": 0 }]] },
+    "Succeeded?": { "main": [[{ "node": "Return Success", "type": "main", "index": 0 }], [{ "node": "Attempts Left?", "type": "main", "index": 0 }]] },
+    "Attempts Left?": { "main": [[{ "node": "Backoff (2^attempt s)", "type": "main", "index": 0 }], [{ "node": "Fail: Retries Exhausted", "type": "main", "index": 0 }]] },
+    "Backoff (2^attempt s)": { "main": [[{ "node": "HTTP Attempt", "type": "main", "index": 0 }]] }
+  },
+  "nodes": [
+    { "name": "Called by Another Workflow", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1.3, "position": [0, 300], "parameters": { "inputSource": "workflowInputs", "workflowInputs": { "values": [{ "name": "url", "type": "string" }, { "name": "method", "type": "string" }, { "name": "max_attempts", "type": "number" }] } } },
+    { "name": "Init Request", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [220, 300], "parameters": { "mode": "manual", "includeOtherFields": false, "assignments": { "assignments": [
+      { "id": "i1", "name": "url", "value": "={{ $json.url }}", "type": "string" },
+      { "id": "i2", "name": "method", "value": "={{ ($json.method || 'GET').toUpperCase() }}", "type": "string" },
+      { "id": "i3", "name": "max_attempts", "value": "={{ Math.min(Math.max(Number($json.max_attempts) || 3, 1), 5) }}", "type": "number" }
+    ] }, "options": {} } },
+    { "name": "HTTP Attempt", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [440, 300], "onError": "continueRegularOutput", "parameters": { "method": "={{ $('Init Request').first().json.method }}", "url": "={{ $('Init Request').first().json.url }}", "options": { "timeout": 10000, "response": { "response": { "fullResponse": true, "neverError": true } } } } },
+    { "name": "Evaluate Attempt", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [660, 300], "parameters": { "mode": "runOnceForEachItem", "language": "javaScript", "jsCode": "// One run of this node per attempt, so the run index is the attempt number minus one.\nconst init = $('Init Request').first().json;\nconst attempt = $runIndex + 1;\nconst r = $json;\nconst status = r.statusCode ?? null;\nconst ok = !r.error && status >= 200 && status < 300;\nconst error = r.error ? (r.error.message || JSON.stringify(r.error)) : (ok ? '' : 'HTTP ' + status);\n// Text responses arrive under `data`, JSON under `body`.\nconst body = r.body ?? r.data ?? null;\nreturn { json: { ok, attempt, max_attempts: init.max_attempts, url: init.url, status, error: String(error).slice(0, 300), body: ok ? body : null, retry: !ok && attempt < init.max_attempts } };" } },
+    { "name": "Succeeded?", "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [880, 300], "parameters": { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "conditions": [{ "leftValue": "={{ $json.ok }}", "operator": { "type": "boolean", "operation": "true", "singleValue": true } }], "combinator": "and" } } },
+    { "name": "Return Success", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [1100, 200], "parameters": { "mode": "manual", "includeOtherFields": false, "assignments": { "assignments": [
+      { "id": "d1", "name": "ok", "value": true, "type": "boolean" },
+      { "id": "d2", "name": "attempts", "value": "={{ $json.attempt }}", "type": "number" },
+      { "id": "d3", "name": "status", "value": "={{ $json.status }}", "type": "number" },
+      { "id": "d4", "name": "body", "value": "={{ typeof $json.body === 'string' ? $json.body : JSON.stringify($json.body) }}", "type": "string" }
+    ] }, "options": {} } },
+    { "name": "Attempts Left?", "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [1100, 420], "parameters": { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "conditions": [{ "leftValue": "={{ $json.retry }}", "operator": { "type": "boolean", "operation": "true", "singleValue": true } }], "combinator": "and" } } },
+    { "name": "Backoff (2^attempt s)", "type": "n8n-nodes-base.wait", "typeVersion": 1.1, "position": [1320, 540], "parameters": { "resume": "timeInterval", "amount": "={{ Math.pow(2, $json.attempt) }}", "unit": "seconds" } },
+    { "name": "Fail: Retries Exhausted", "type": "n8n-nodes-base.stopAndError", "typeVersion": 1, "position": [1320, 360], "parameters": { "errorType": "errorMessage", "errorMessage": "=Request to {{ $json.url }} failed after {{ $json.attempt }} attempts. Last error: {{ $json.error }}" } },
+    { "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [-32, 208], "parameters": { "content": "## W4: Reusable HTTP retry with exponential backoff\nCall it from any workflow with **Execute Sub-workflow** and inputs `url`, `method`, `max_attempts` (1-5).\n\nTries the request, waits 2s, 4s, 8s... between attempts.\nSuccess returns `{ ok, attempts, status, body }`.\nIf every attempt fails it **stops with an error**, so the caller fails loudly and the global error handler logs it.", "color": 5, "width": 460, "height": 300 } }
+  ]
+}
