@@ -1,0 +1,93 @@
+{
+  "name": "W2 - Daily Change Detection (USGS)",
+  "settings": { "executionOrder": "v1" },
+  "connections": {
+    "Run Now (demo)": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Daily 07:00": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Fetch USGS Feed", "type": "main", "index": 0 }]] },
+    "Fetch USGS Feed": { "main": [[{ "node": "Normalize + Hash", "type": "main", "index": 0 }], [{ "node": "Mark: fetch_failed", "type": "main", "index": 0 }]] },
+    "Mark: fetch_failed": { "main": [[{ "node": "Save Daily Report", "type": "main", "index": 0 }]] },
+    "Normalize + Hash": { "main": [[{ "node": "Load Stored Hashes (window)", "type": "main", "index": 0 }]] },
+    "Load Stored Hashes (window)": { "main": [[{ "node": "Diff Against Stored", "type": "main", "index": 0 }]] },
+    "Diff Against Stored": { "main": [[{ "node": "Split Out Changes", "type": "main", "index": 0 }, { "node": "Save Daily Report", "type": "main", "index": 0 }]] },
+    "Split Out Changes": { "main": [[{ "node": "Upsert Current State", "type": "main", "index": 0 }]] },
+    "Upsert Current State": { "main": [[{ "node": "Skip If Version Logged", "type": "main", "index": 0 }]] },
+    "Skip If Version Logged": { "main": [[{ "node": "Append History", "type": "main", "index": 0 }]] },
+    "Save Daily Report": { "main": [[{ "node": "Gmail: Daily Report", "type": "main", "index": 0 }, { "node": "Any Alerts?", "type": "main", "index": 0 }]] },
+    "Any Alerts?": { "main": [[{ "node": "Gmail: Batched Alert", "type": "main", "index": 0 }]] }
+  },
+  "nodes": [
+    { "name": "Run Now (demo)", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 200], "parameters": {} },
+    { "name": "Daily 07:00", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.4, "position": [0, 400], "parameters": { "rule": { "interval": [{ "field": "days", "daysInterval": 1, "triggerAtHour": 7, "triggerAtMinute": 0 }] } } },
+    { "name": "Config", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [220, 300], "parameters": { "mode": "manual", "includeOtherFields": false, "assignments": { "assignments": [
+      { "id": "c1", "name": "feed_url", "value": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson", "type": "string" },
+      { "id": "c2", "name": "alert_min_mag", "value": 4.5, "type": "number" },
+      { "id": "c3", "name": "report_to", "value": "you@example.com", "type": "string" },
+      { "id": "c4", "name": "compare_window_days", "value": 3, "type": "number" }
+    ] }, "options": {} } },
+    { "name": "Fetch USGS Feed", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [440, 300], "retryOnFail": true, "maxTries": 3, "waitBetweenTries": 2000, "onError": "continueErrorOutput", "parameters": { "method": "GET", "url": "={{ $json.feed_url }}", "options": { "timeout": 20000, "response": { "response": { "responseFormat": "json" } } } } },
+    { "name": "Mark: fetch_failed", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [660, 460], "parameters": { "mode": "manual", "includeOtherFields": false, "assignments": { "assignments": [
+      { "id": "f1", "name": "status", "value": "fetch_failed", "type": "string" },
+      { "id": "f2", "name": "error", "value": "={{ ($json.error?.message ?? JSON.stringify($json.error ?? 'unknown')).slice(0, 300) }}", "type": "string" },
+      { "id": "f3", "name": "fetched", "value": 0, "type": "number" },
+      { "id": "f4", "name": "new_count", "value": 0, "type": "number" },
+      { "id": "f5", "name": "changed_count", "value": 0, "type": "number" },
+      { "id": "f6", "name": "unchanged_count", "value": 0, "type": "number" },
+      { "id": "f7", "name": "alerts_count", "value": 0, "type": "number" }
+    ] }, "options": {} } },
+    { "name": "Normalize + Hash", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [660, 200], "parameters": { "mode": "runOnceForAllItems", "language": "javaScript", "jsCode": "// cyrb53: small stable 53-bit string hash. Enough for change detection, not for security.\nfunction hash(str) { let h1 = 0xdeadbeef, h2 = 0x41c6ce57; for (let i = 0; i < str.length; i++) { const ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); } h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909); h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909); return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16); }\nconst feed = $input.first().json;\nif (!Array.isArray(feed.features)) throw new Error('Feed has no features array');\nreturn feed.features.filter(f => f && f.id).map(f => {\n  const p = f.properties || {};\n  const depth = f.geometry?.coordinates?.[2] ?? null;\n  const rec = { record_id: f.id, mag: p.mag ?? null, place: p.place ?? '', status: p.status ?? '', depth, event_time: new Date(p.time).toISOString() };\n  // Only fields that matter for alerts go into the hash, so cosmetic feed updates are not 'changes'.\n  rec.hash = hash([rec.mag, rec.place, rec.status, depth].join('|'));\n  return { json: rec };\n});" } },
+    { "name": "Load Stored Hashes (window)", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [880, 200], "executeOnce": true, "alwaysOutputData": true, "parameters": { "resource": "row", "operation": "get", "dataTableId": { "__rl": true, "mode": "name", "value": "w2_records" }, "matchType": "allConditions", "filters": { "conditions": [{ "keyName": "event_time", "condition": "gte", "keyValue": "={{ $now.minus($('Config').first().json.compare_window_days, 'days').toISO() }}" }] }, "returnAll": true } },
+    { "name": "Diff Against Stored", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1100, 200], "parameters": { "mode": "runOnceForAllItems", "language": "javaScript", "jsCode": "const current = $('Normalize + Hash').all().map(i => i.json);\nconst stored = new Map($input.all().filter(i => i.json.record_id).map(i => [i.json.record_id, i.json.hash]));\nconst cfg = $('Config').first().json;\nconst changes = []; let unchanged = 0;\nfor (const r of current) {\n  const prev = stored.get(r.record_id);\n  if (prev === r.hash) { unchanged++; continue; }\n  changes.push({ ...r, change_type: prev === undefined ? 'new' : 'changed', version_key: r.record_id + '|' + r.hash });\n}\nconst alerts = changes.filter(c => (c.mag ?? 0) >= cfg.alert_min_mag).sort((a, b) => b.mag - a.mag);\nreturn [{ json: { status: 'ok', error: '', fetched: current.length, new_count: changes.filter(c => c.change_type === 'new').length, changed_count: changes.filter(c => c.change_type === 'changed').length, unchanged_count: unchanged, alerts_count: alerts.length, alerts, changes } }];" } },
+    { "name": "Split Out Changes", "type": "n8n-nodes-base.splitOut", "typeVersion": 1, "position": [1320, 80], "parameters": { "fieldToSplitOut": "changes", "options": {} } },
+    { "name": "Upsert Current State", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [1540, 80], "parameters": { "resource": "row", "operation": "upsert", "dataTableId": { "__rl": true, "mode": "name", "value": "w2_records" }, "matchType": "allConditions", "filters": { "conditions": [{ "keyName": "record_id", "condition": "eq", "keyValue": "={{ $json.record_id }}" }] }, "columns": { "mappingMode": "defineBelow", "value": { "record_id": "={{ $json.record_id }}", "hash": "={{ $json.hash }}", "mag": "={{ $json.mag }}", "place": "={{ $json.place }}", "event_time": "={{ $json.event_time }}" }, "schema": [
+      { "id": "record_id", "displayName": "record_id", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "hash", "displayName": "hash", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "mag", "displayName": "mag", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "place", "displayName": "place", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "event_time", "displayName": "event_time", "required": false, "defaultMatch": false, "display": true, "type": "dateTime", "canBeUsedToMatch": true }
+    ] }, "options": {} } },
+    { "name": "Skip If Version Logged", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [1760, 80], "parameters": { "resource": "row", "operation": "rowNotExists", "dataTableId": { "__rl": true, "mode": "name", "value": "w2_history" }, "matchType": "allConditions", "filters": { "conditions": [{ "keyName": "version_key", "keyValue": "={{ $('Split Out Changes').item.json.version_key }}" }] } } },
+    { "name": "Append History", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [1980, 80], "parameters": { "resource": "row", "operation": "insert", "dataTableId": { "__rl": true, "mode": "name", "value": "w2_history" }, "columns": { "mappingMode": "defineBelow", "value": {
+      "version_key": "={{ $('Split Out Changes').item.json.version_key }}",
+      "record_id": "={{ $('Split Out Changes').item.json.record_id }}",
+      "change_type": "={{ $('Split Out Changes').item.json.change_type }}",
+      "hash": "={{ $('Split Out Changes').item.json.hash }}",
+      "mag": "={{ $('Split Out Changes').item.json.mag }}",
+      "place": "={{ $('Split Out Changes').item.json.place }}",
+      "detected_at": "={{ $now.toISO() }}"
+    }, "schema": [
+      { "id": "version_key", "displayName": "version_key", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "record_id", "displayName": "record_id", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "change_type", "displayName": "change_type", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "hash", "displayName": "hash", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "mag", "displayName": "mag", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "place", "displayName": "place", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "detected_at", "displayName": "detected_at", "required": false, "defaultMatch": false, "display": true, "type": "dateTime", "canBeUsedToMatch": true }
+    ] }, "options": { "optimizeBulk": true } } },
+    { "name": "Save Daily Report", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [1320, 340], "parameters": { "resource": "row", "operation": "insert", "dataTableId": { "__rl": true, "mode": "name", "value": "w2_reports" }, "columns": { "mappingMode": "defineBelow", "value": {
+      "run_at": "={{ $now.toISO() }}",
+      "status": "={{ $json.status }}",
+      "fetched": "={{ $json.fetched }}",
+      "new_count": "={{ $json.new_count }}",
+      "changed_count": "={{ $json.changed_count }}",
+      "unchanged_count": "={{ $json.unchanged_count }}",
+      "alerts_count": "={{ $json.alerts_count }}",
+      "error": "={{ $json.error }}",
+      "execution_id": "={{ $execution.id }}"
+    }, "schema": [
+      { "id": "run_at", "displayName": "run_at", "required": false, "defaultMatch": false, "display": true, "type": "dateTime", "canBeUsedToMatch": true },
+      { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "fetched", "displayName": "fetched", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "new_count", "displayName": "new_count", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "changed_count", "displayName": "changed_count", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "unchanged_count", "displayName": "unchanged_count", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "alerts_count", "displayName": "alerts_count", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+      { "id": "error", "displayName": "error", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "execution_id", "displayName": "execution_id", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+    ] }, "options": {} } },
+    { "name": "Gmail: Daily Report", "type": "n8n-nodes-base.gmail", "typeVersion": 2.2, "position": [1540, 260], "onError": "continueRegularOutput", "parameters": { "resource": "message", "operation": "send", "sendTo": "={{ $('Config').first().json.report_to }}", "subject": "=[W2 daily] {{ $json.status }}: {{ $json.new_count }} new, {{ $json.changed_count }} changed, {{ $json.alerts_count }} alerts", "emailType": "text", "message": "=Run status: {{ $json.status }}\nFetched: {{ $json.fetched }}\nNew: {{ $json.new_count }}\nChanged: {{ $json.changed_count }}\nUnchanged: {{ $json.unchanged_count }}\nAlerts (M >= {{ $(\"Config\").first().json.alert_min_mag }}): {{ $json.alerts_count }}\n{{ $json.error ? \"Error: \" + $json.error : \"\" }}", "options": { "appendAttribution": false } } },
+    { "name": "Any Alerts?", "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [1540, 460], "parameters": { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "conditions": [{ "leftValue": "={{ $json.alerts_count }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }], "combinator": "and" } } },
+    { "name": "Gmail: Batched Alert", "type": "n8n-nodes-base.gmail", "typeVersion": 2.2, "position": [1760, 460], "onError": "continueRegularOutput", "parameters": { "resource": "message", "operation": "send", "sendTo": "={{ $('Config').first().json.report_to }}", "subject": "=[W2 ALERT] {{ $json.alerts_count }} quake(s) at or above M{{ $(\"Config\").first().json.alert_min_mag }}", "emailType": "text", "message": "={{ $('Diff Against Stored').first().json.alerts.map(a => 'M' + a.mag + '  ' + a.place + '  (' + a.change_type + ', ' + a.event_time + ')').join('\\n') }}", "options": { "appendAttribution": false } } },
+    { "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [-32, 112], "parameters": { "content": "## W2: Daily change-detection pipeline\nPublic USGS earthquake feed (no key). Daily at 07:00 or **Run Now**.\n\n1. Fetch with 3 retries; a failure is reported, never silent.\n2. Hash only the meaningful fields of each record.\n3. Compare against stored hashes for a bounded time window (one read, not one per record).\n4. Only new/changed rows are written: upsert current state, append guarded history.\n5. One batched alert email + one daily report row and email.\n\nRerun = 0 new, 0 changed, 0 alerts.", "color": 5, "width": 460, "height": 420 } }
+  ]
+}
