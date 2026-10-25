@@ -1,0 +1,27 @@
+{
+  "name": "W4 Demo - Flaky Job (uses retry + error handler)",
+  "settings": { "executionOrder": "v1", "errorWorkflow": "REPLACE_WITH_W4_ERROR_HANDLER_ID" },
+  "connections": {
+    "GET /w4-flaky-demo?mode=ok|fail": { "main": [[{ "node": "Pick Target URL", "type": "main", "index": 0 }]] },
+    "Run Now (ok mode)": { "main": [[{ "node": "Pick Target URL", "type": "main", "index": 0 }]] },
+    "Pick Target URL": { "main": [[{ "node": "Call W4 Retry Sub-workflow", "type": "main", "index": 0 }]] },
+    "Call W4 Retry Sub-workflow": { "main": [[{ "node": "Use Result", "type": "main", "index": 0 }]] }
+  },
+  "nodes": [
+    { "name": "GET /w4-flaky-demo?mode=ok|fail", "type": "n8n-nodes-base.webhook", "typeVersion": 2.2, "position": [0, 200], "parameters": { "httpMethod": "GET", "path": "w4-flaky-demo", "responseMode": "onReceived", "options": {} } },
+    { "name": "Run Now (ok mode)", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 400], "parameters": {} },
+    { "name": "Pick Target URL", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [220, 300], "parameters": { "mode": "manual", "includeOtherFields": false, "assignments": { "assignments": [
+      { "id": "t1", "name": "mode", "value": "={{ $json.query?.mode === 'fail' ? 'fail' : 'ok' }}", "type": "string" },
+      { "id": "t2", "name": "url", "value": "={{ $json.query?.mode === 'fail' ? 'https://feed.invalid/health' : 'https://earthquake.usgs.gov/fdsnws/event/1/version' }}", "type": "string" }
+    ] }, "options": {} } },
+    { "name": "Call W4 Retry Sub-workflow", "type": "n8n-nodes-base.executeWorkflow", "typeVersion": 1.4, "position": [440, 300], "parameters": { "source": "database", "workflowId": { "__rl": true, "mode": "id", "value": "REPLACE_WITH_W4_RETRY_WORKFLOW_ID", "cachedResultName": "W4 - HTTP Retry with Backoff (sub-workflow)" }, "workflowInputs": { "mappingMode": "defineBelow", "value": { "url": "={{ $json.url }}", "method": "GET", "max_attempts": 3 }, "schema": [
+      { "id": "url", "displayName": "url", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "method", "displayName": "method", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "max_attempts", "displayName": "max_attempts", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true }
+    ] }, "mode": "once", "options": { "waitForSubWorkflow": true } } },
+    { "name": "Use Result", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [660, 300], "parameters": { "mode": "manual", "includeOtherFields": true, "assignments": { "assignments": [
+      { "id": "u1", "name": "summary", "value": "={{ 'Upstream OK after ' + $json.attempts + ' attempt(s), status ' + $json.status }}", "type": "string" }
+    ] }, "options": {} } },
+    { "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [-32, 112], "parameters": { "content": "## W4 demo: a job that depends on a flaky API\nCalls the **W4 retry sub-workflow**. `?mode=fail` points it at a host that does not exist: the sub-workflow retries 3 times with backoff, then fails, this job fails, and the **W4 Global Error Handler** logs and alerts.\n\nSettings: Error workflow = W4 - Global Error Handler.", "color": 3, "width": 460, "height": 300 } }
+  ]
+}

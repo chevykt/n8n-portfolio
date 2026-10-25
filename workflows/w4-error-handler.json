@@ -1,0 +1,37 @@
+{
+  "name": "W4 - Global Error Handler",
+  "settings": { "executionOrder": "v1" },
+  "connections": {
+    "On Workflow Error": { "main": [[{ "node": "Extract Error Details", "type": "main", "index": 0 }]] },
+    "Extract Error Details": { "main": [[{ "node": "Log to w4_errors", "type": "main", "index": 0 }]] },
+    "Log to w4_errors": { "main": [[{ "node": "Gmail: Failure Alert", "type": "main", "index": 0 }]] }
+  },
+  "nodes": [
+    { "name": "On Workflow Error", "type": "n8n-nodes-base.errorTrigger", "typeVersion": 1, "position": [0, 300], "parameters": {} },
+    { "name": "Extract Error Details", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [220, 300], "parameters": { "mode": "manual", "includeOtherFields": false, "assignments": { "assignments": [
+      { "id": "e1", "name": "occurred_at", "value": "={{ $now.toISO() }}", "type": "string" },
+      { "id": "e2", "name": "workflow_name", "value": "={{ $json.workflow?.name ?? 'unknown' }}", "type": "string" },
+      { "id": "e3", "name": "workflow_id", "value": "={{ $json.workflow?.id ?? '' }}", "type": "string" },
+      { "id": "e4", "name": "node", "value": "={{ $json.execution?.error?.node?.name ?? $json.execution?.lastNodeExecuted ?? 'unknown' }}", "type": "string" },
+      { "id": "e5", "name": "message", "value": "={{ String($json.execution?.error?.message ?? 'no message').slice(0, 500) }}", "type": "string" },
+      { "id": "e6", "name": "execution_id", "value": "={{ $json.execution?.id ?? '' }}", "type": "string" },
+      { "id": "e7", "name": "execution_url", "value": "={{ $json.execution?.url ?? '' }}", "type": "string" },
+      { "id": "e8", "name": "mode", "value": "={{ $json.execution?.mode ?? '' }}", "type": "string" },
+      { "id": "e9", "name": "alert_to", "value": "you@example.com", "type": "string" }
+    ] }, "options": {} } },
+    { "name": "Log to w4_errors", "type": "n8n-nodes-base.dataTable", "typeVersion": 1.1, "position": [440, 300], "parameters": { "resource": "row", "operation": "insert", "dataTableId": { "__rl": true, "mode": "name", "value": "w4_errors" }, "columns": { "mappingMode": "defineBelow", "value": {
+      "occurred_at": "={{ $json.occurred_at }}", "workflow_name": "={{ $json.workflow_name }}", "workflow_id": "={{ $json.workflow_id }}", "node": "={{ $json.node }}", "message": "={{ $json.message }}", "execution_id": "={{ $json.execution_id }}", "execution_url": "={{ $json.execution_url }}", "mode": "={{ $json.mode }}"
+    }, "schema": [
+      { "id": "occurred_at", "displayName": "occurred_at", "required": false, "defaultMatch": false, "display": true, "type": "dateTime", "canBeUsedToMatch": true },
+      { "id": "workflow_name", "displayName": "workflow_name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "workflow_id", "displayName": "workflow_id", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "node", "displayName": "node", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "message", "displayName": "message", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "execution_id", "displayName": "execution_id", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "execution_url", "displayName": "execution_url", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+      { "id": "mode", "displayName": "mode", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+    ] }, "options": {} } },
+    { "name": "Gmail: Failure Alert", "type": "n8n-nodes-base.gmail", "typeVersion": 2.2, "position": [660, 300], "disabled": true, "onError": "continueRegularOutput", "parameters": { "resource": "message", "operation": "send", "sendTo": "={{ $('Extract Error Details').item.json.alert_to }}", "subject": "=[n8n FAILURE] {{ $('Extract Error Details').item.json.workflow_name }} at node {{ $('Extract Error Details').item.json.node }}", "emailType": "text", "message": "=Workflow: {{ $('Extract Error Details').item.json.workflow_name }} ({{ $('Extract Error Details').item.json.workflow_id }})\nNode: {{ $('Extract Error Details').item.json.node }}\nError: {{ $('Extract Error Details').item.json.message }}\nExecution: {{ $('Extract Error Details').item.json.execution_id }} ({{ $('Extract Error Details').item.json.mode }})\nOpen: {{ $('Extract Error Details').item.json.execution_url }}\nTime: {{ $('Extract Error Details').item.json.occurred_at }}", "options": { "appendAttribution": false } } },
+    { "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [-32, 208], "parameters": { "content": "## W4: Global error handler\nSet as the **Error workflow** in the settings of W1, W2, W5 and the W4 demo job.\nn8n runs it automatically when one of them fails in a production run (webhook / schedule).\n\nLogs workflow, node, message and an execution link to **w4_errors**, then emails an alert.\nThe email node ships disabled: attach a Gmail credential and enable it.", "color": 5, "width": 460, "height": 300 } }
+  ]
+}
