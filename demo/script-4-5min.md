@@ -1,4 +1,6 @@
-# Demo video script (about 4.5 minutes)
+# Demo video script: long version (about 4.5 minutes)
+
+The 2-3 minute cut is [script-2-3min.md](script-2-3min.md).
 
 Before recording: open the n8n workflows list, the Data tables tab, and these executions in separate tabs:
 - W1: #2, #5
