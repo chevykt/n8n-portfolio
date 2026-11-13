@@ -63,7 +63,6 @@ flowchart TB
 ```
 workflows/   importable JSON exports (no credentials; instance IDs replaced with REPLACE_WITH_... placeholders)
 docs/        one README per workflow with setup, test results and known limits; NOT-PROVEN.md
-demo/        video script, W1 recording notes, application summary
 ```
 
 ## Credentials
